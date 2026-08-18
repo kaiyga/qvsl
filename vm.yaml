@@ -1,0 +1,51 @@
+vm:
+  name: "alpine-vm"
+  arch: "x86_64"
+  cpu_cores: 2
+  memory_mb: 2048
+  machine_type: "q35"
+vnc:
+  enabled: true
+  port: 5900
+  novnc_port: 6080
+drives:
+  - name: "system"
+    type: "file"
+    format: "qcow2"
+    path: "/vm/disks/alpine-system.qcow2"
+    size: "10G" 
+    template:
+      source: "/vm/disks/template.qcow2"
+      mode: "linked" # linked/full
+  # Not tested
+  # - name: "data-lvm"
+  #   type: "device"
+  #   path: "/dev/vg_data/lv_vm_data"
+  #   format: "raw"
+cloud_init:
+  enabled: true
+  config:
+    chpasswd: 
+      list:
+        - root:P@ssw0rd
+      expire: false
+    bootcmd:
+      - sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+      - sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+      - echo "" > /root/from-included-user-data
+  # Or use enpoints into container for mounting secrets
+  # user_data_path: /app/cloud-init/user-data
+  # meta_data_path: ""
+networks:
+  - type: "nat"
+    ports:
+      - host: 2222
+        guest: 22
+        proto: "tcp"
+      - host: 8080
+        guest: 80
+        proto: "tcp"
+  # Not tested
+  # - type: "bridge"
+  #   bridge_interface: "wlan0"
+extra_args: ""

@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  vm:
+    image: kaiyga/qvsl
+    container_name: kvm-runner
+    network_mode: host
+    devices:
+      - /dev/kvm:/dev/kvm
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - "2222:2222"
+      - "6080:6080"
+    volumes:
+      - ./vm.yaml:/app/vm.yaml
+      - ./vm-data:/vm/disks
+      - ./cloud-init:/app/cloud-init
+    restart: unless-stopped
