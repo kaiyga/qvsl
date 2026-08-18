@@ -35,11 +35,17 @@ ssh -p 2222 root@localhost
 
 # Files
 
-Into `vm.yaml` you can put your configuration of VM. Its can work with all distros 
+- vm.yaml: Manifest file with VM declaration (works with any Linux distribution).
+- qemu-run.sh.tmpl: Go-template that acts as the pre-init script and QEMU CLI builder.
+- docker-compose.yml: Runner container environment setup (KVM passthrough, storage mounts).
 
-`vm.yaml` how `values.yaml` in helm for qemu and templated `qemu-run.sh.tmpl` script
+# Featurest 
 
-`qemu-run.sh.tmpl` - is pre-init scripts and qemu args builder 
+- Storage Engines: Support for QCOW2 files and raw LVM block devices.
+- Smart Provisioning: Auto-creation of Linked (CoW) or Full copy disks from base templates.
+- Auto-Resize: Automatic virtual disk expansion using qemu-img resize prior to boot.
+- Cloud-Init Engine: Dynamic cidata seed ISO generation on the fly.
 
-Serius its so simple and doent need more
 
+# Thanks
+- (bluebrown/go-template-cli)[https://github.com/bluebrown/go-template-cli]. Its the great thing for automotisation
