@@ -48,4 +48,4 @@ ssh -p 2222 root@localhost
 
 
 # Thanks
-- (bluebrown/go-template-cli)[https://github.com/bluebrown/go-template-cli]. Its the great thing for automotisation
+- [bluebrown/go-template-cli](https://github.com/bluebrown/go-template-cli). Its the great thing for automotisation
