@@ -8,7 +8,7 @@ QEMU_CMD=(
     "qemu-system-{{ .vm.arch }}"
     "-enable-kvm"
     "-name" "{{ .vm.name }}"
-    "-machine" "{{ .vm.machine_type }}"
+    "-machine" "{{ default "q35" .vm.machine_type }}"
     "-cpu" "host"
     "-smp" "{{ .vm.cpu_cores }}"
     "-m" "{{ .vm.memory_mb }}"
@@ -23,11 +23,10 @@ check_kvm() {
 }
 
 # QCOW2 Template handler
-
 template_init_qcow2() {
     local target_path="$1"
     local source_template="$2"
-    local mode="${3:-linked}" # linked (по умолчанию) или full
+    local mode="${3:-linked}" # linked (default) or full
 
     if [ ! -f "$source_template" ]; then
         echo "ERROR: Base template image '$source_template' not found!" >&2
@@ -38,11 +37,9 @@ template_init_qcow2() {
 
     if [ "$mode" = "linked" ]; then
         echo "--> [Storage] Creating LINKED qcow2 image from template: $source_template"
-        # -b задает родителю backing file (CoW). -F фиксирует формат родителя
         qemu-img create -f qcow2 -b "$source_template" -F qcow2 "$target_path"
     elif [ "$mode" = "full" ]; then
         echo "--> [Storage] Creating FULL COPY from template: $source_template (this may take time)..."
-        # Выполняем честную конвертацию/копирование без зависимости от базового файла
         qemu-img convert -p -f qcow2 -O qcow2 "$source_template" "$target_path"
     else
         echo "ERROR: Unknown template mode '$mode' for qcow2! Use 'linked' or 'full'." >&2
@@ -51,7 +48,6 @@ template_init_qcow2() {
 }
 
 # LVM Template handler
-
 template_init_lvm() {
     local target_dev="$1"
     local source_template="$2"
@@ -93,11 +89,7 @@ resize_disk_if_needed() {
     fi
 }
 
-
-# 
-# Disk manager entrypoint
-#
-
+# Disk manager entrypoints
 add_file_disk() {
     local drive_path="$1"
     local format="$2"
@@ -229,34 +221,41 @@ enable_vnc() {
 check_kvm
 
 echo "--> Configuring storage..."
+{{ if .drives }}
 {{ range $index, $drive := .drives }}
+  {{ $tmplSource := "" }}
+  {{ $tmplMode := "" }}
+  {{ if $drive.template }}
+    {{ $tmplSource = default "" $drive.template.source }}
+    {{ $tmplMode = default "" $drive.template.mode }}
+  {{ end }}
+
   {{ if eq $drive.type "file" }}
 add_file_disk \
     "{{ $drive.path }}" \
     "{{ $drive.format }}" \
-    "{{ $drive.size }}" \
-    "{{ $drive.template.source }}" \
-    "{{ $drive.template.mode }}"
+    "{{ default "" $drive.size }}" \
+    "{{ $tmplSource }}" \
+    "{{ $tmplMode }}"
 
   {{ else if eq $drive.type "device" }}
 add_device_disk \
     "{{ $drive.path }}" \
     "{{ $drive.format }}" \
-    "{{ $drive.template.source }}" \
-    "{{ $drive.template.mode }}"
+    "{{ $tmplSource }}" \
+    "{{ $tmplMode }}"
   {{ end }}
+{{ end }}
 {{ end }}
 
 # Cloud-init templating
-
 DEFAULT_USER_DATA_PATH="/tmp/cloud-init-user-data.yaml"
 USER_DATA_FILE=""
 
-# Path to file is priority because its may be secret
+{{ if .cloud_init }}
 {{ if .cloud_init.user_data_path }}
   USER_DATA_FILE="{{ .cloud_init.user_data_path }}"
   echo "--> [Cloud-Init] Using external user-data file: $USER_DATA_FILE"
-# Use inline config if path does not exist
 {{ else if or .cloud_init.configRaw .cloud_init.config }}
   USER_DATA_FILE="$DEFAULT_USER_DATA_PATH"
   echo "--> [Cloud-Init] Generating user-data from inline config..."
@@ -273,12 +272,15 @@ EOF
 {{ else }}
   echo "--> [Cloud-Init] Warning: No user-data provided."
 {{ end }}
+{{ end }}
+
 if [ -n "$USER_DATA_FILE" ] && [ -f "$USER_DATA_FILE" ]; then
-  setup_cloud_init "$USER_DATA_FILE" "" "{{ .vm.name }}"
+    setup_cloud_init "$USER_DATA_FILE" "" "{{ .vm.name }}"
 fi
 
 # Networks Configuration
 echo "--> Configuring networks..."
+{{ if .networks }}
 {{ range $netIndex, $net := .networks }}
   {{ if eq $net.type "bridge" }}
 add_bridge_network "{{ $netIndex }}" "{{ $net.bridge_interface }}" "{{ $.vm.name }}"
@@ -291,9 +293,10 @@ add_bridge_network "{{ $netIndex }}" "{{ $net.bridge_interface }}" "{{ $.vm.name
 add_nat_network "{{ $netIndex }}" "{{ $forwardRules }}"
   {{ end }}
 {{ end }}
+{{ end }}
 
 # Graphics & VNC
-{{ if .vnc.enabled }}
+{{ if and .vnc .vnc.enabled }}
 enable_vnc "{{ .vnc.port }}" "{{ .vnc.novnc_port }}"
 {{ else }}
 echo "--> Headless mode enabled."
@@ -302,4 +305,4 @@ QEMU_CMD+=("-nographic")
 
 # Launch QEMU
 echo "--> Launching QEMU..."
-exec "${QEMU_CMD[@]}" {{ .extra_args }}
+exec "${QEMU_CMD[@]}" {{ default "" .extra_args }}

@@ -1,19 +1,17 @@
-FROM ubuntu:22.04
+FROM alpine:3.22
 
-ENV DEBIAN_FRONTEND=noninteractive
-
-RUN apt-get update && apt-get install -y \
-    qemu-system-x86 \
-    qemu-utils \
-    genisoimage \
+RUN apk add --no-cache \
+    bash \
+    coreutils \
+    qemu-system-x86_64 \
+    qemu-img \
+    cdrkit \
     iproute2 \
     curl \
     novnc \
     websockify \
-    python3-numpy \
-    && rm -rf /var/lib/apt/lists/*
+    py3-numpy
 
-# Установка go-template-cli
 RUN curl -Lo /usr/local/bin/go-template https://github.com/bluebrown/go-template-cli/releases/download/v0.3.2/tpl-linux-amd64-static \
     && chmod +x /usr/local/bin/go-template
 
