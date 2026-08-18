@@ -24,6 +24,15 @@ And lets goooo!
 docker compose up
 ```
 
+You can see VNC console on 
+```
+http://localhost:6080/vnc.html
+```
+Or connect via SSH
+```
+ssh -p 2222 root@localhost
+```
+
 # Files
 
 Into `vm.yaml` you can put your configuration of VM. Its can work with all distros 

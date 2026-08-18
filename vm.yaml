@@ -29,9 +29,11 @@ cloud_init:
       list:
         - root:P@ssw0rd
       expire: false
-    bootcmd:
-      - sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
-      - sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+    runcmd:
+      - sed -i 's/[Dd]isallow[Pp]assword[Aa]uth[Yy]es/allowpasswordauthyes/g' /etc/ssh/sshd_config.d/*.conf || true
+      - sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/g' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf
+      - echo "PermitRootLogin yes" >> /etc/ssh/sshd_config.d/50-cloud-init.conf
+      - rc-service sshd restart
       - echo "" > /root/from-included-user-data
   # Or use enpoints into container for mounting secrets
   # user_data_path: /app/cloud-init/user-data
