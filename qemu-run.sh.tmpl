@@ -1,9 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+. /app/lib/http-source.sh
+. /app/lib/disk-mgr.sh
+. /app/lib/disk-cli.sh
+. /app/lib/cloud-init-mgr.sh
+. /app/lib/cloud-init-cli.sh
+. /app/lib/network-mgr.sh
+. /app/lib/network-cli.sh
+
 echo "==> Initializing VM startup: {{ .vm.name }}"
 
-# Global QEMU argument arrays
+check_kvm() {
+    if [ ! -e /dev/kvm ]; then
+        echo "ERROR: /dev/kvm not found! Ensure KVM is passed through to container." >&2
+        exit 1
+    fi
+}
+
+check_kvm
+
 QEMU_CMD=(
     "qemu-system-{{ .vm.arch }}"
     "-enable-kvm"
@@ -15,252 +31,47 @@ QEMU_CMD=(
     "-serial" "stdio"
 )
 
-check_kvm() {
-    if [ ! -e /dev/kvm ]; then
-        echo "ERROR: /dev/kvm not found! Ensure KVM is passed through to the container." >&2
-        exit 1
-    fi
-}
-
-# QCOW2 Template handler
-template_init_qcow2() {
-    local target_path="$1"
-    local source_template="$2"
-    local mode="${3:-linked}" # linked (default) or full
-
-    if [ ! -f "$source_template" ]; then
-        echo "ERROR: Base template image '$source_template' not found!" >&2
-        exit 1
-    fi
-
-    mkdir -p "$(dirname "$target_path")"
-
-    if [ "$mode" = "linked" ]; then
-        echo "--> [Storage] Creating LINKED qcow2 image from template: $source_template"
-        qemu-img create -f qcow2 -b "$source_template" -F qcow2 "$target_path"
-    elif [ "$mode" = "full" ]; then
-        echo "--> [Storage] Creating FULL COPY from template: $source_template (this may take time)..."
-        qemu-img convert -p -f qcow2 -O qcow2 "$source_template" "$target_path"
-    else
-        echo "ERROR: Unknown template mode '$mode' for qcow2! Use 'linked' or 'full'." >&2
-        exit 1
-    fi
-}
-
-# LVM Template handler
-template_init_lvm() {
-    local target_dev="$1"
-    local source_template="$2"
-    local mode="${3:-full}"
-
-    if [ ! -b "$target_dev" ]; then
-        echo "ERROR: Target LVM block device '$target_dev' does not exist!" >&2
-        exit 1
-    fi
-
-    if [ "$mode" = "full" ]; then
-        echo "--> [Storage] Writing template image to LVM block device $target_dev..."
-        qemu-img convert -p -f qcow2 -O raw "$source_template" "$target_dev"
-    elif [ "$mode" = "linked" ]; then
-        echo "ERROR: Linked mode for LVM requires external LVM snapshotting on the host!" >&2
-        echo "Please create an LVM thin-snapshot on the host or use 'full' mode." >&2
-        exit 1
-    else
-        echo "ERROR: Unknown template mode '$mode' for LVM!" >&2
-        exit 1
-    fi
-}
-
-resize_disk_if_needed() {
-    local drive_path="$1"
-    local target_size="$2"
-
-    [ -z "$target_size" ] && return 0
-
-    local current_size_bytes
-    current_size_bytes=$(qemu-img info --output=json "$drive_path" | grep -o '"virtual-size": [0-9]*' | awk '{print $2}')
-    
-    local target_size_bytes
-    target_size_bytes=$(numfmt --from=iec "$target_size")
-
-    if [ "$target_size_bytes" -gt "$current_size_bytes" ]; then
-        echo "--> [Storage] Resizing disk $drive_path to $target_size..."
-        qemu-img resize "$drive_path" "$target_size"
-    fi
-}
-
-# Disk manager entrypoints
-add_file_disk() {
-    local drive_path="$1"
-    local format="$2"
-    local size="$3"
-    local template_source="${4:-}"
-    local template_mode="${5:-linked}"
-
-    if [ ! -f "$drive_path" ]; then
-        if [ -n "$template_source" ]; then
-            template_init_qcow2 "$drive_path" "$template_source" "$template_mode"
-        else
-            echo "--> [Storage] Creating empty $size $format disk: $drive_path"
-            mkdir -p "$(dirname "$drive_path")"
-            qemu-img create -f "$format" "$drive_path" "$size"
-        fi
-    else
-        echo "--> [Storage] Using existing disk image: $drive_path"
-    fi
-
-    if [ -n "$size" ]; then
-        resize_disk_if_needed "$drive_path" "$size"
-    fi
-
-    QEMU_CMD+=("-drive" "file=$drive_path,format=$format,if=virtio")
-}
-
-add_device_disk() {
-    local drive_path="$1"
-    local format="$2"
-    local template_source="${3:-}"
-    local template_mode="${4:-full}"
-
-    if [ ! -b "$drive_path" ]; then
-        echo "ERROR: Target block device $drive_path not found!" >&2
-        exit 1
-    fi
-
-    if [ -n "$template_source" ]; then
-        template_init_lvm "$drive_path" "$template_source" "$template_mode"
-    fi
-
-    QEMU_CMD+=("-drive" "file=$drive_path,format=$format,if=virtio")
-}
-
-setup_cloud_init() {
-    local user_data="$1"
-    local meta_data="${2:-}"
-    local vm_name="$3"
-    
-    local ci_iso="/vm/disks/cloud-init.iso"
-    local init_flag="/vm/disks/.cloud-init.done"
-
-    if [ ! -f "$init_flag" ] || [ ! -f "$ci_iso" ]; then
-        echo "--> [Cloud-Init] Initializing seed ISO generation..."
-
-        if [ ! -f "$user_data" ]; then
-            echo "ERROR: Cloud-init user-data ($user_data) not found!" >&2
-            exit 1
-        fi
-
-        local ci_dir
-        ci_dir=$(mktemp -d /tmp/cidata.XXXXXX)
-
-        cp "$user_data" "$ci_dir/user-data"
-
-        if [ -n "$meta_data" ] && [ -f "$meta_data" ]; then
-            cp "$meta_data" "$ci_dir/meta-data"
-        else
-            cat <<EOF > "$ci_dir/meta-data"
-instance-id: ${vm_name}-static-id
-local-hostname: ${vm_name}
-EOF
-        fi
-
-        genisoimage -output "$ci_iso" \
-            -volid cidata \
-            -J -R \
-            "$ci_dir/user-data" "$ci_dir/meta-data" > /dev/null 2>&1
-
-        rm -rf "$ci_dir"
-        touch "$init_flag"
-        echo "--> [Cloud-Init] Seed ISO generated."
-    else
-        echo "--> [Cloud-Init] Reusing existing seed ISO: $ci_iso"
-    fi
-
-    QEMU_CMD+=("-drive" "file=$ci_iso,format=raw,media=cdrom")
-}
-
-add_bridge_network() {
-    local idx="$1"
-    local bridge_if="$2"
-    local vm_name="$3"
-
-    echo "--> Network #$idx: Bridge ($bridge_if)"
-    QEMU_CMD+=(
-        "-netdev" "tap,id=net${idx},ifname=tap${idx}-${vm_name},script=no,downscript=no"
-        "-device" "virtio-net-pci,netdev=net${idx}"
-    )
-}
-
-add_nat_network() {
-    local idx="$1"
-    local fwd_rules="$2"
-
-    echo "--> Network #$idx: User/NAT"
-    QEMU_CMD+=(
-        "-netdev" "user,id=net${idx}${fwd_rules}"
-        "-device" "virtio-net-pci,netdev=net${idx}"
-    )
-}
-
-enable_vnc() {
-    local vnc_port="$1"
-    local novnc_port="$2"
-    local vnc_display=$(( vnc_port - 5900 ))
-
-    echo "--> Enabling VNC on port $vnc_port (display :$vnc_display)..."
-    QEMU_CMD+=("-vnc" "0.0.0.0:$vnc_display" "-vga" "std")
-
-    echo "--> Launching noVNC Web console on http://localhost:$novnc_port/vnc.html ..."
-    websockify --web /usr/share/novnc/ "$novnc_port" "127.0.0.1:$vnc_port" > /dev/null 2>&1 &
-}
-
-# 
-# Execution & Template Instantiation
-# 
-
-check_kvm
-
-echo "--> Configuring storage..."
+echo "--> Processing storage..."
 {{ if .drives }}
 {{ range $index, $drive := .drives }}
   {{ $tmplSource := "" }}
   {{ $tmplMode := "" }}
+  {{ $tmplFormat := "" }}
   {{ if $drive.template }}
     {{ $tmplSource = default "" $drive.template.source }}
     {{ $tmplMode = default "" $drive.template.mode }}
+    {{ $tmplFormat = default "" $drive.template.format }}
   {{ end }}
 
-  {{ if eq $drive.type "file" }}
-add_file_disk \
+  mgr_ensure_disk \
+    "{{ $drive.type }}" \
     "{{ $drive.path }}" \
     "{{ $drive.format }}" \
     "{{ default "" $drive.size }}" \
     "{{ $tmplSource }}" \
-    "{{ $tmplMode }}"
+    "{{ $tmplMode }}" \
+    "{{ $tmplFormat }}"
 
-  {{ else if eq $drive.type "device" }}
-add_device_disk \
-    "{{ $drive.path }}" \
-    "{{ $drive.format }}" \
-    "{{ $tmplSource }}" \
-    "{{ $tmplMode }}"
-  {{ end }}
+  read -r -a DISK_ARGS <<< "$(cli_add_disk "{{ $drive.path }}" "{{ $drive.format }}")"
+  QEMU_CMD+=("${DISK_ARGS[@]}")
 {{ end }}
 {{ end }}
 
-# Cloud-init templating
 DEFAULT_USER_DATA_PATH="/tmp/cloud-init-user-data.yaml"
+DEFAULT_NET_CONFIG_PATH="/tmp/cloud-init-network-config.yaml"
+
 USER_DATA_FILE=""
+NET_CONFIG_FILE=""
 
 {{ if .cloud_init }}
-{{ if .cloud_init.user_data_path }}
-  USER_DATA_FILE="{{ .cloud_init.user_data_path }}"
-  echo "--> [Cloud-Init] Using external user-data file: $USER_DATA_FILE"
-{{ else if or .cloud_init.configRaw .cloud_init.config }}
-  USER_DATA_FILE="$DEFAULT_USER_DATA_PATH"
-  echo "--> [Cloud-Init] Generating user-data from inline config..."
-
-  cat << 'EOF' > "$USER_DATA_FILE"
+  {{ if .cloud_init.user_data_url }}
+    download_if_url "{{ .cloud_init.user_data_url }}" "$DEFAULT_USER_DATA_PATH"
+    USER_DATA_FILE="$DEFAULT_USER_DATA_PATH"
+  {{ else if .cloud_init.user_data_path }}
+    USER_DATA_FILE="{{ .cloud_init.user_data_path }}"
+  {{ else if or .cloud_init.configRaw .cloud_init.config }}
+    USER_DATA_FILE="$DEFAULT_USER_DATA_PATH"
+    cat << 'EOF' > "$USER_DATA_FILE"
 #cloud-config
 {{ if .cloud_init.configRaw }}
 {{ .cloud_init.configRaw }}
@@ -268,41 +79,65 @@ USER_DATA_FILE=""
 {{ .cloud_init.config | toYaml }}
 {{ end }}
 EOF
-
-{{ else }}
-  echo "--> [Cloud-Init] Warning: No user-data provided."
+  {{ end }}
 {{ end }}
+
+{{ if .networks }}
+NET_CONFIG_FILE="$DEFAULT_NET_CONFIG_PATH"
+cat << 'EOF' > "$NET_CONFIG_FILE"
+{{ include "qvsl.networkConfig" . }}
+EOF
 {{ end }}
 
 if [ -n "$USER_DATA_FILE" ] && [ -f "$USER_DATA_FILE" ]; then
-    setup_cloud_init "$USER_DATA_FILE" "" "{{ .vm.name }}"
+    mgr_setup_cloud_init "$USER_DATA_FILE" "${NET_CONFIG_FILE:-}" "" "{{ .vm.name }}"
+    read -r -a CI_ARGS <<< "$(cli_add_cdrom "/vm/disks/cloud-init.iso")"
+    QEMU_CMD+=("${CI_ARGS[@]}")
 fi
 
-# Networks Configuration
-echo "--> Configuring networks..."
+echo "--> Processing networks..."
 {{ if .networks }}
 {{ range $netIndex, $net := .networks }}
+  {{ $ipList := "" }}
+  {{ if $net.ips }}
+    {{ $ipList = join "," $net.ips }}
+  {{ else if $net.ip }}
+    {{ $ipList = $net.ip }}
+  {{ end }}
+
   {{ if eq $net.type "bridge" }}
-add_bridge_network "{{ $netIndex }}" "{{ $net.bridge_interface }}" "{{ $.vm.name }}"
+    mgr_prepare_bridge_net \
+      "{{ $netIndex }}" \
+      "{{ $net.bridge_interface }}" \
+      "{{ $.vm.name }}" \
+      "{{ $ipList }}" \
+      "{{ default "" $net.mac }}" \
+      "{{ default "false" $net.anti_spoof }}"
+
+    read -r -a NET_ARGS <<< "$(cli_add_bridge_network "{{ $netIndex }}" "{{ $net.bridge_interface }}" "{{ $.vm.name }}")"
+    QEMU_CMD+=("${NET_ARGS[@]}")
+
   {{ else if eq $net.type "nat" }}
+    mgr_prepare_nat_net "{{ $netIndex }}"
     {{- $forwardRules := "" -}}
     {{- range $pIndex, $port := $net.ports -}}
       {{- $proto := default "tcp" $port.proto -}}
       {{- $forwardRules = printf "%s,hostfwd=%s::%d-:%d" $forwardRules $proto (int $port.host) (int $port.guest) -}}
     {{- end -}}
-add_nat_network "{{ $netIndex }}" "{{ $forwardRules }}"
+
+    read -r -a NET_ARGS <<< "$(cli_add_nat_network "{{ $netIndex }}" "{{ $forwardRules }}")"
+    QEMU_CMD+=("${NET_ARGS[@]}")
   {{ end }}
 {{ end }}
 {{ end }}
 
-# Graphics & VNC
 {{ if and .vnc .vnc.enabled }}
-enable_vnc "{{ .vnc.port }}" "{{ .vnc.novnc_port }}"
+  vnc_display=$(( {{ .vnc.port }} - 5900 ))
+  QEMU_CMD+=("-vnc" "0.0.0.0:$vnc_display" "-vga" "std")
+  websockify --web /usr/share/novnc/ "{{ .vnc.novnc_port }}" "127.0.0.1:{{ .vnc.port }}" > /dev/null 2>&1 &
 {{ else }}
-echo "--> Headless mode enabled."
-QEMU_CMD+=("-nographic")
+  QEMU_CMD+=("-nographic")
 {{ end }}
 
-# Launch QEMU
 echo "--> Launching QEMU..."
 exec "${QEMU_CMD[@]}" {{ default "" .extra_args }}

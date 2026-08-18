@@ -41,6 +41,7 @@ ssh -p 2222 root@localhost
 
 # Featurest 
 
+- Template throw HTTP: Can download QCOW2 templates
 - Storage Engines: Support for QCOW2 files and raw LVM block devices.
 - Smart Provisioning: Auto-creation of Linked (CoW) or Full copy disks from base templates.
 - Auto-Resize: Automatic virtual disk expansion using qemu-img resize prior to boot.

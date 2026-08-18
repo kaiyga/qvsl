@@ -1,0 +1,35 @@
+{{- define "qvsl.networkConfig" -}}
+{{- if .networks -}}
+version: 2
+ethernets:
+{{- range $netIndex, $net := .networks }}
+  eth{{ $netIndex }}:
+    match:
+      name: "en*"
+    {{- if $net.mac }}
+      macaddress: "{{ $net.mac }}"
+    {{- end }}
+    {{- if $net.ips }}
+    addresses:
+      {{- range $ip := $net.ips }}
+      - "{{ $ip }}"
+      {{- end }}
+    {{- else if $net.ip }}
+    addresses:
+      - "{{ $net.ip }}"
+    {{- end }}
+    {{- if $net.gateway }}
+    routes:
+      - to: default
+        via: "{{ $net.gateway }}"
+    {{- end }}
+    {{- if $net.dns }}
+    nameservers:
+      addresses:
+        {{- range $dns := $net.dns }}
+        - "{{ $dns }}"
+        {{- end }}
+    {{- end }}
+{{- end }}
+{{- end -}}
+{{- end -}}

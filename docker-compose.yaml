@@ -2,8 +2,7 @@ version: '3.8'
 
 services:
   vm:
-    image: kaiyga/qvsl
-    container_name: kvm-runner
+    image: kaiyga/qvsl:v0.0.2
     network_mode: host
     devices:
       - /dev/kvm:/dev/kvm

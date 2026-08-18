@@ -19,7 +19,9 @@ WORKDIR /app
 
 COPY vm.yaml /app/vm.yaml
 COPY qemu-run.sh.tmpl /app/qemu-run.sh.tmpl
+COPY lib /app/lib
+COPY templates /app/templates
 
 EXPOSE 6080 5900
 
-CMD ["sh", "-c", "cat /app/vm.yaml | go-template -d yaml --file /app/qemu-run.sh.tmpl > /app/run.sh && chmod +x /app/run.sh && /app/run.sh"]
+CMD ["sh", "-c", "cat /app/vm.yaml | go-template -d yaml -f /app/qemu-run.sh.tmpl -f /app/templates/* -n qemu-run.sh.tmpl > /app/run.sh && chmod +x /app/run.sh && /app/run.sh"]

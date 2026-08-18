@@ -15,8 +15,9 @@ drives:
     path: "/vm/disks/alpine-system.qcow2"
     size: "10G" 
     template:
-      source: "/vm/disks/template.qcow2"
+      source: "/vm/disks/template.qcow2" # Path / HTTP Url
       mode: "linked" # linked/full
+      format: qcow2 # qcow2/raw
   # Not tested
   # - name: "data-lvm"
   #   type: "device"
